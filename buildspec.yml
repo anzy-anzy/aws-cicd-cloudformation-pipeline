@@ -1,0 +1,18 @@
+version: 0.2
+
+phases:
+  install:
+    commands:
+      - echo "Installing AWS CLI..."
+      - yum install -y aws-cli
+  build:
+    commands:
+      - echo "Packaging CloudFormation templates..."
+      - aws cloudformation package \
+          --template-file templates/infrastructure.yml \
+          --s3-bucket $S3_BUCKET \
+          --output-template-file outputtemplate.yml
+artifacts:
+  files:
+    - outputtemplate.yml
+
