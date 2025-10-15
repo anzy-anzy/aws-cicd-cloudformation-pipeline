@@ -3,14 +3,20 @@ version: 0.2
 phases:
   install:
     commands:
-      - echo "Installing AWS CLI..."
+      - echo "Installing dependencies..."
+      - pip install --upgrade pip
+      - pip install cfn-lint
       - yum install -y aws-cli
+  pre_build:
+    commands:
+      - echo "Running CFN-Lint static analysis..."
+      - cfn-lint templates/infrastructure.yml
   build:
     commands:
-      - echo "Packaging CloudFormation templates..."
+      - echo "Packaging CloudFormation template..."
       - aws cloudformation package \
           --template-file templates/infrastructure.yml \
-          --s3-bucket $S3_BUCKET \
+          --s3-bucket anslem-cicd-artifacts \
           --output-template-file outputtemplate.yml
 artifacts:
   files:
