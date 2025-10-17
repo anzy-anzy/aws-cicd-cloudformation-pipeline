@@ -6,21 +6,18 @@ phases:
       - echo "Installing dependencies..."
       - pip install --upgrade pip
       - pip install cfn-lint
-
   pre_build:
     commands:
-      - echo "Running CloudFormation Linter check..."
-      # Run lint and continue even if warnings or minor errors occur
-      - cfn-lint templates/infrastructure.yml || true
-
+      - echo "Running CFN-Lint static analysis..."
+      - cfn-lint templates/infrastructure.yml
   build:
     commands:
       - echo "Packaging CloudFormation template..."
-      - aws cloudformation package \
+      - |
+        aws cloudformation package \
           --template-file templates/infrastructure.yml \
           --s3-bucket anslem-cicd-artifacts \
           --output-template-file outputtemplate.yml
-
   post_build:
     commands:
       - echo "Build stage completed successfully!"
