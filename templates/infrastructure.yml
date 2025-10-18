@@ -1,25 +1,23 @@
-AWSTemplateFormatVersion: "2010-09-09"
+AWSTemplateFormatVersion: 2010-09-09
 Description: >
-  CloudFormation template to create a custom VPC, EC2 instance (for app),
-  and RDS MySQL database for CI/CD pipeline project.
+  CloudFormation template to provision a CI/CD environment with a custom VPC,
+  EC2 instance for the application, and an RDS MySQL database.
+  Uses AWS Systems Manager Parameter Store for secure password management.
 
 Parameters:
   KeyName:
     Type: AWS::EC2::KeyPair::KeyName
     Description: Name of an existing EC2 KeyPair to enable SSH access
 
-  DBUser:
+  DBUsername:
     Type: String
-    Description: Database username
-
-  DBPassword:
-    Type: String
-    NoEcho: true
-    Description: Database password
+    Description: Database master username
+    MinLength: 1
+    MaxLength: 16
 
 Resources:
   # -----------------------------
-  # Networking Resources
+  # Networking Section
   # -----------------------------
   MyVPC:
     Type: AWS::EC2::VPC
@@ -44,75 +42,46 @@ Resources:
       VpcId: !Ref MyVPC
       InternetGatewayId: !Ref InternetGateway
 
-  # -----------------------------
-  # Public Subnet
-  # -----------------------------
   PublicSubnet:
     Type: AWS::EC2::Subnet
     Properties:
       VpcId: !Ref MyVPC
       CidrBlock: 10.0.1.0/24
-      AvailabilityZone: us-east-1a
+      AvailabilityZone: !Select [ 0, !GetAZs '' ]
       MapPublicIpOnLaunch: true
       Tags:
         - Key: Name
-          Value: Public-Subnet
+          Value: CICD-PublicSubnet
 
-  # -----------------------------
-  # Private Subnets (2 AZs for RDS)
-  # -----------------------------
-  PrivateSubnetA:
-    Type: AWS::EC2::Subnet
-    Properties:
-      VpcId: !Ref MyVPC
-      CidrBlock: 10.0.2.0/24
-      AvailabilityZone: us-east-1a
-      Tags:
-        - Key: Name
-          Value: Private-Subnet-A
-
-  PrivateSubnetB:
-    Type: AWS::EC2::Subnet
-    Properties:
-      VpcId: !Ref MyVPC
-      CidrBlock: 10.0.3.0/24
-      AvailabilityZone: us-east-1b
-      Tags:
-        - Key: Name
-          Value: Private-Subnet-B
-
-  # -----------------------------
-  # Route Table & Association
-  # -----------------------------
-  PublicRouteTable:
+  RouteTable:
     Type: AWS::EC2::RouteTable
     Properties:
       VpcId: !Ref MyVPC
       Tags:
         - Key: Name
-          Value: Public-RouteTable
+          Value: CICD-RouteTable
 
   PublicRoute:
     Type: AWS::EC2::Route
     DependsOn: AttachGateway
     Properties:
-      RouteTableId: !Ref PublicRouteTable
+      RouteTableId: !Ref RouteTable
       DestinationCidrBlock: 0.0.0.0/0
       GatewayId: !Ref InternetGateway
 
-  PublicSubnetRouteTableAssociation:
+  SubnetRouteTableAssociation:
     Type: AWS::EC2::SubnetRouteTableAssociation
     Properties:
       SubnetId: !Ref PublicSubnet
-      RouteTableId: !Ref PublicRouteTable
+      RouteTableId: !Ref RouteTable
 
   # -----------------------------
-  # Security Groups
+  # Security Group
   # -----------------------------
-  WebSecurityGroup:
+  MySecurityGroup:
     Type: AWS::EC2::SecurityGroup
     Properties:
-      GroupDescription: Allow HTTP, HTTPS, and SSH access
+      GroupDescription: Allow SSH (22) and HTTP (80) inbound
       VpcId: !Ref MyVPC
       SecurityGroupIngress:
         - IpProtocol: tcp
@@ -123,101 +92,61 @@ Resources:
           FromPort: 80
           ToPort: 80
           CidrIp: 0.0.0.0/0
-        - IpProtocol: tcp
-          FromPort: 443
-          ToPort: 443
-          CidrIp: 0.0.0.0/0
       Tags:
         - Key: Name
-          Value: Web-SG
-
-  RDSSecurityGroup:
-    Type: AWS::EC2::SecurityGroup
-    Properties:
-      GroupDescription: Allow MySQL access from the web server
-      VpcId: !Ref MyVPC
-      SecurityGroupIngress:
-        - IpProtocol: tcp
-          FromPort: 3306
-          ToPort: 3306
-          SourceSecurityGroupId: !Ref WebSecurityGroup
-      Tags:
-        - Key: Name
-          Value: RDS-SG
+          Value: CICD-SecurityGroup
 
   # -----------------------------
-  # EC2 Instance (Web/App Server)
+  # EC2 Instance
   # -----------------------------
-  WebServer:
+  MyEC2Instance:
     Type: AWS::EC2::Instance
     Properties:
-      InstanceType: t2.micro
+      InstanceType: t3.micro
       KeyName: !Ref KeyName
-      ImageId: ami-0c7217cdde317cfec  # Amazon Linux 2 (us-east-1)
+      ImageId: ami-0c02fb55956c7d316  # Amazon Linux 2 (us-east-1)
       SubnetId: !Ref PublicSubnet
       SecurityGroupIds:
-        - !Ref WebSecurityGroup
+        - !Ref MySecurityGroup
       Tags:
         - Key: Name
-          Value: CICD-WebServer
-      UserData:
-        Fn::Base64: !Sub |
-          #!/bin/bash
-          yum update -y
-          yum install -y httpd
-          systemctl start httpd
-          systemctl enable httpd
-          echo "<h1>Welcome to CI/CD CloudFormation Pipeline Project</h1>" > /var/www/html/index.html
+          Value: CICD-EC2
 
   # -----------------------------
-  # RDS MySQL Database
+  # RDS Database
   # -----------------------------
-  MyDBSubnetGroup:
-    Type: AWS::RDS::DBSubnetGroup
-    Properties:
-      DBSubnetGroupDescription: Subnet group for RDS
-      SubnetIds:
-        - !Ref PrivateSubnetA
-        - !Ref PrivateSubnetB
-
-  MyDatabase:
+  MyDBInstance:
     Type: AWS::RDS::DBInstance
     Properties:
-      DBInstanceIdentifier: cicd-db-instance
-      DBInstanceClass: db.t3.micro
+      DBName: cicddb
       Engine: mysql
-      MasterUsername: !Ref DBUser
-      MasterUserPassword: !Ref DBPassword
+      EngineVersion: 8.0.39
+      MasterUsername: !Ref DBUsername
+      MasterUserPassword: "{{resolve:ssm-secure:/cicd/dbpassword:1}}"
       AllocatedStorage: 20
-      DBSubnetGroupName: !Ref MyDBSubnetGroup
-      VPCSecurityGroups:
-        - !Ref RDSSecurityGroup
-      PubliclyAccessible: false
-      MultiAZ: false
+      DBInstanceClass: db.t3.micro
+      PubliclyAccessible: true
       BackupRetentionPeriod: 1
-      DeletionProtection: false
+      VPCSecurityGroups:
+        - !GetAtt MySecurityGroup.GroupId
       Tags:
         - Key: Name
-          Value: CICD-MySQL-DB
+          Value: CICD-RDS
 
-# -----------------------------
-# Outputs
-# -----------------------------
 Outputs:
   VPCId:
     Description: VPC ID
     Value: !Ref MyVPC
 
   PublicSubnetId:
-    Description: Public Subnet ID
+    Description: ID of the public subnet
     Value: !Ref PublicSubnet
 
-  WebServerPublicIP:
-    Description: Public IP address of the web server
-    Value: !GetAtt WebServer.PublicIp
+  EC2PublicIP:
+    Description: Public IP address of the EC2 instance
+    Value: !GetAtt MyEC2Instance.PublicIp
 
   RDSEndpoint:
-    Description: Endpoint of the RDS database
-    Value: !GetAtt MyDatabase.Endpoint.Address
-
+    Description: RDS Endpoint address
+    Value: !GetAtt MyDBInstance.Endpoint.Address
 
